@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mi Lovable</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; display:flex; height:100vh; font-family:system-ui; }
+    #chat { width:40%; display:flex; flex-direction:column; border-right:1px solid #ddd; }
+    #log { flex:1; overflow:auto; padding:12px; }
+    .msg { padding:8px 10px; margin:6px 0; border-radius:8px; white-space:pre-wrap; font-size:14px; }
+    .user { background:#e7f0ff; }
+    .bot  { background:#f3f3f3; }
+    #input { display:flex; border-top:1px solid #ddd; }
+    #input textarea { flex:1; border:0; padding:10px; resize:none; height:64px; font-size:14px; }
+    #input button { padding:0 18px; border:0; background:#111; color:#fff; cursor:pointer; }
+    #preview { flex:1; }
+    iframe { width:100%; height:100%; border:0; background:#fff; }
+    @media (max-width:700px){
+      body { flex-direction:column; }
+      #chat { width:100%; height:50%; border-right:0; border-bottom:1px solid #ddd; }
+    }
+  </style>
+</head>
+<body>
+  <div id="chat">
+    <div id="log"></div>
+    <div id="input">
+      <textarea id="prompt" placeholder="Describe tu app… (ej: un cronómetro pomodoro)"></textarea>
+      <button id="send">Generar</button>
+    </div>
+  </div>
+  <div id="preview">
+    <iframe id="frame" sandbox="allow-scripts allow-modals allow-same-origin"></iframe>
+  </div>
+
+  <script>
+    const log = document.getElementById("log");
+    const prompt = document.getElementById("prompt");
+    const frame = document.getElementById("frame");
+    const history = []; // memoria de la conversación
+
+    function add(role, text) {
+      const d = document.createElement("div");
+      d.className = "msg " + role;
+      d.textContent = text;
+      log.appendChild(d);
+      log.scrollTop = log.scrollHeight;
+      return d;
+    }
+
+    async function send() {
+      const text = prompt.value.trim();
+      if (!text) return;
+      prompt.value = "";
+      add("user", text);
+      history.push({ role: "user", content: text });
+
+      const botEl = add("bot", "");
+      let full = "";
+
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: history }),
+      });
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop();
+        for (const p of parts) {
+          if (!p.startsWith("data: ")) continue;
+          const data = p.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const j = JSON.parse(data);
+            if (j.delta) {
+              full += j.delta;
+              botEl.textContent = full;
+              log.scrollTop = log.scrollHeight;
+            }
+          } catch {}
+        }
+      }
+
+      history.push({ role: "assistant", content: full });
+
+      // Extrae el HTML generado y lo pinta en el iframe
+      const m = full.match(/```html\s*([\s\S]*?)```/i);
+      const html = m ? m[1] : full;
+      frame.srcdoc = html;
+    }
+
+    document.getElementById("send").onclick = send;
+    prompt.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+  </script>
+</body>
+</html>
